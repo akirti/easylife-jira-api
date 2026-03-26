@@ -33,7 +33,8 @@ logger = logging.getLogger(__name__)
 config_path = os.environ.get("CONFIG_PATH", "config/default.json")
 config = Config(config_path)
 
-API_PREFIX = "/api/v1"
+_root = config.get("server.root_path", "").rstrip("/")
+API_PREFIX = f"{_root}/api/v1"
 SERVICE_NAME = "jira-api"
 
 
@@ -63,7 +64,7 @@ app = FastAPI(
     title="Jira Dashboard API",
     description="Standalone API service for Jira dashboard data, sync, and issue management.",
     version="1.0.0",
-    root_path=config.get("server.root_path", ""),
+    root_path="",  # prefix is applied directly to route paths via _root
     lifespan=lifespan,
 )
 
@@ -86,13 +87,13 @@ app.include_router(sync_router, prefix=API_PREFIX)
 app.include_router(issues_router, prefix=API_PREFIX)
 
 
-@app.get("/health/live", tags=["health"])
+@app.get(f"{_root}/health/live", tags=["health"])
 async def health_live():
     """Liveness probe."""
     return {"status": "ok", "service": SERVICE_NAME}
 
 
-@app.get("/health/ready", tags=["health"])
+@app.get(f"{_root}/health/ready", tags=["health"])
 async def health_ready():
     """Readiness probe — checks DB connectivity."""
     try:
