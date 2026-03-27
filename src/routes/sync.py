@@ -91,10 +91,8 @@ async def get_sync_config(
         {"project_key": project_key}, {"_id": 0}
     )
     if not config:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"{ERR_SYNC_CONFIG_NOT_FOUND}: {project_key}",
-        )
+        # Return default config for this project key (not yet persisted)
+        return JiraSyncConfig(project_key=project_key)
     return JiraSyncConfig(**config)
 
 

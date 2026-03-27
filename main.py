@@ -52,6 +52,17 @@ async def lifespan(app: FastAPI):
     init_sync_routes(sync_service)
     init_issue_routes(jira_client, config)
 
+    # Validate Jira connectivity at startup
+    jira_base = config.get("jira.base_url", "")
+    if not jira_base:
+        logger.warning("jira.base_url is empty — Jira features will be unavailable")
+    else:
+        try:
+            jira_client._get_client()
+            logger.info("✓ Jira client connected to %s", jira_base)
+        except Exception as exc:
+            logger.error("✗ Jira client failed to connect to %s: %s", jira_base, exc)
+
     logger.info("%s started", SERVICE_NAME)
     yield
 
