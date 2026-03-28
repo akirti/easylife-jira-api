@@ -17,6 +17,7 @@ from src.models import (
     CanvasNode,
     CanvasNodeData,
     CanvasResponse,
+    EpicSummary,
     DashboardStats,
     IssueListResponse,
     JiraIssueDoc,
@@ -151,8 +152,16 @@ async def get_canvas(
     cursor = collection.find(query, {"_id": 0})
     issues = await cursor.to_list(length=1000)
 
+    # Fetch epics for the filter dropdown
+    epic_cursor = collection.find(
+        {"project_key": project_key, "issue_type": "Epic"},
+        {"_id": 0, "key": 1, "summary": 1},
+    ).sort("key", 1)
+    epic_docs = await epic_cursor.to_list(length=200)
+    epics = [{"key": d["key"], "summary": d.get("summary", "")} for d in epic_docs]
+
     nodes, edges = _build_canvas_graph(issues)
-    return CanvasResponse(nodes=nodes, edges=edges)
+    return CanvasResponse(nodes=nodes, edges=edges, epics=epics)
 
 
 @router.get(

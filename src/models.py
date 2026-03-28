@@ -117,10 +117,17 @@ class CanvasEdge(BaseModel):
     style: Dict[str, Any] = Field(default_factory=dict)
 
 
+class EpicSummary(BaseModel):
+    """Minimal epic info for the filter dropdown."""
+    key: str
+    summary: str = ""
+
+
 class CanvasResponse(BaseModel):
     """Combined canvas data for the frontend."""
     nodes: List[CanvasNode] = Field(default_factory=list)
     edges: List[CanvasEdge] = Field(default_factory=list)
+    epics: List[EpicSummary] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
