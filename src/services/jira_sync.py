@@ -1,7 +1,7 @@
 """Jira sync service — syncs Jira issues to MongoDB and archives old data.
 
 Main entry points:
-- sync_project(): Pull issues from Jira, map, upsert to MongoDB.
+- sync_project(): Pull issues from Jira in batches, map, upsert to MongoDB.
 - compute_days_in_status(): Calculate days since last status change.
 - archive_old_issues(): Archive old issues to GCS, remove from MongoDB.
 """
@@ -22,6 +22,21 @@ logger = logging.getLogger(__name__)
 # Constants
 ARCHIVE_CONTENT_TYPE = "application/gzip"
 JSONL_EXTENSION = ".jsonl.gz"
+BATCH_SIZE = 100
+
+
+# In-memory sync progress tracker (keyed by project_key)
+_sync_progress: Dict[str, Dict[str, Any]] = {}
+
+
+def get_sync_progress(project_key: str) -> Optional[Dict[str, Any]]:
+    """Get current sync progress for a project."""
+    return _sync_progress.get(project_key)
+
+
+def clear_sync_progress(project_key: str) -> None:
+    """Clear sync progress for a project."""
+    _sync_progress.pop(project_key, None)
 
 
 class JiraSyncService:
@@ -35,14 +50,17 @@ class JiraSyncService:
     async def sync_project(
         self,
         project_key: str,
-        months_back: int = 3,
+        days_back: int = 90,
         attribute_map: Optional[Dict[str, str]] = None,
     ) -> int:
-        """Sync Jira issues for a project into MongoDB.
+        """Sync Jira issues for a project into MongoDB in batches.
+
+        Fetches BATCH_SIZE issues at a time from Jira, upserts each batch
+        to MongoDB immediately, and updates progress for UI polling.
 
         Args:
             project_key: Jira project key (e.g. 'SCEN').
-            months_back: How many months of history to sync.
+            days_back: How many days of history to sync.
             attribute_map: Custom field mapping overrides.
 
         Returns:
@@ -51,31 +69,111 @@ class JiraSyncService:
         if attribute_map is None:
             attribute_map = self._config.get("attribute_map", {})
 
-        jql = f"project = {project_key} AND updated >= -{months_back}m ORDER BY updated DESC"
+        jql = f"project = {project_key} AND updated >= -{days_back}d ORDER BY updated DESC"
         logger.info("Starting sync for %s (JQL: %s)", project_key, jql)
 
-        raw_issues = self._jira.search_issues(jql, expand="changelog")
+        # Initialize progress
+        _sync_progress[project_key] = {
+            "status": "fetching",
+            "project_key": project_key,
+            "fetched": 0,
+            "synced": 0,
+            "total_estimated": 0,
+            "current_batch": 0,
+            "message": "Fetching issues from Jira...",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        }
+
         db = get_db()
         collection = db[COLL_JIRA_ISSUES]
         synced_count = 0
         now = datetime.now(timezone.utc)
 
-        for raw_issue in raw_issues:
-            doc = map_issue(raw_issue, attribute_map)
-            doc["synced_at"] = now
-            doc["url"] = self._build_issue_url(raw_issue.key)
-            doc["days_in_status"] = self._compute_days_from_changelog(raw_issue)
+        try:
+            # Fetch and process in batches
+            client = self._jira._get_client()
+            start_at = 0
+            batch_num = 0
 
-            await collection.update_one(
-                {"key": doc["key"]},
-                {"$set": doc},
-                upsert=True,
-            )
-            synced_count += 1
+            while True:
+                # Fetch one batch from Jira
+                batch = client.search_issues(
+                    jql,
+                    startAt=start_at,
+                    maxResults=BATCH_SIZE,
+                    expand="changelog",
+                    fields="*all",
+                )
 
-        await self._update_sync_config(project_key, now, synced_count)
-        logger.info("Synced %d issues for %s", synced_count, project_key)
-        return synced_count
+                if not batch:
+                    break
+
+                batch_num += 1
+                fetched_so_far = start_at + len(batch)
+
+                # Update progress — fetching
+                _sync_progress[project_key].update({
+                    "status": "syncing",
+                    "fetched": fetched_so_far,
+                    "total_estimated": max(fetched_so_far, _sync_progress[project_key]["total_estimated"]),
+                    "current_batch": batch_num,
+                    "message": f"Processing batch {batch_num} ({fetched_so_far} issues fetched)...",
+                })
+
+                # Map and upsert this batch
+                for raw_issue in batch:
+                    doc = map_issue(raw_issue, attribute_map)
+                    doc["synced_at"] = now
+                    doc["url"] = self._build_issue_url(raw_issue.key)
+                    doc["days_in_status"] = self._compute_days_from_changelog(raw_issue)
+
+                    await collection.update_one(
+                        {"key": doc["key"]},
+                        {"$set": doc},
+                        upsert=True,
+                    )
+                    synced_count += 1
+
+                # Update progress — batch done
+                _sync_progress[project_key].update({
+                    "synced": synced_count,
+                    "message": f"Synced {synced_count} issues ({batch_num} batches)...",
+                })
+
+                logger.info(
+                    "Batch %d: fetched %d, synced %d total for %s",
+                    batch_num, len(batch), synced_count, project_key,
+                )
+
+                # Check if we've exhausted results
+                if len(batch) < BATCH_SIZE:
+                    break
+                start_at += len(batch)
+
+            # Update sync config in DB
+            await self._update_sync_config(project_key, now, synced_count)
+
+            # Final progress
+            _sync_progress[project_key].update({
+                "status": "completed",
+                "synced": synced_count,
+                "total_estimated": synced_count,
+                "message": f"Sync complete. {synced_count} issues synced.",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            })
+
+            logger.info("Synced %d issues for %s", synced_count, project_key)
+            return synced_count
+
+        except Exception as exc:
+            _sync_progress[project_key].update({
+                "status": "error",
+                "synced": synced_count,
+                "message": f"Sync failed after {synced_count} issues: {exc}",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            })
+            logger.error("Sync failed for %s after %d issues: %s", project_key, synced_count, exc)
+            raise
 
     def _build_issue_url(self, key: str) -> str:
         """Build the browser URL for a Jira issue."""
@@ -107,6 +205,7 @@ class JiraSyncService:
                 "$setOnInsert": {
                     "project_key": project_key,
                     "sync_period_months": self._config.get("sync.period_months", 3),
+                    "sync_period_days": self._config.get("sync.period_days", 90),
                     "archive_after_months": self._config.get("sync.archive_after_months", 6),
                     "interval_minutes": self._config.get("sync.interval_minutes", 30),
                     "attribute_map": self._config.get("attribute_map", {}),
@@ -172,14 +271,7 @@ class JiraSyncService:
         return archive_record
 
     async def get_archive_list(self, project_key: Optional[str] = None) -> List[Dict[str, Any]]:
-        """List available archives, optionally filtered by project.
-
-        Args:
-            project_key: Optional project key filter.
-
-        Returns:
-            List of archive metadata dicts.
-        """
+        """List available archives, optionally filtered by project."""
         db = get_db()
         query: Dict[str, Any] = {}
         if project_key:
@@ -196,15 +288,7 @@ class JiraSyncService:
     async def get_archive_download_url(
         self, archive_id: str, expiry_minutes: int = 60
     ) -> Optional[str]:
-        """Get a signed download URL for an archive.
-
-        Args:
-            archive_id: The archive identifier.
-            expiry_minutes: URL expiry time in minutes.
-
-        Returns:
-            Signed URL string or None if not found.
-        """
+        """Get a signed download URL for an archive."""
         db = get_db()
         record = await db[COLL_ARCHIVES].find_one({"archive_id": archive_id})
         if not record:
@@ -213,14 +297,7 @@ class JiraSyncService:
 
 
 def compute_days_in_status(changelog: Any) -> Optional[float]:
-    """Find the last status change in changelog and compute days since then.
-
-    Args:
-        changelog: Jira changelog object with .histories attribute.
-
-    Returns:
-        Days since last status change, or None if no status changes found.
-    """
+    """Find the last status change in changelog and compute days since then."""
     last_status_change: Optional[datetime] = None
     histories = getattr(changelog, "histories", []) or []
 
@@ -264,7 +341,6 @@ def _serialize_to_jsonl_gz(issues: List[Dict[str, Any]]) -> bytes:
     lines = []
     for issue in issues:
         cleaned = {k: v for k, v in issue.items() if k != "_id"}
-        # Convert datetime objects to ISO strings
         for key, val in cleaned.items():
             if isinstance(val, datetime):
                 cleaned[key] = val.isoformat()

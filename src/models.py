@@ -61,7 +61,8 @@ class JiraIssueDoc(BaseModel):
 class JiraSyncConfig(BaseModel):
     """Sync configuration stored in MongoDB."""
     project_key: str
-    sync_period_months: int = 3
+    sync_period_months: int = 3  # Legacy — kept for backward compat
+    sync_period_days: int = 90
     archive_after_months: int = 6
     interval_minutes: int = 30
     attribute_map: Dict[str, str] = Field(default_factory=dict)
@@ -233,3 +234,16 @@ class SyncTriggerResponse(BaseModel):
     project_key: str = ""
     issues_synced: int = 0
     message: str = ""
+
+
+class SyncProgress(BaseModel):
+    """Real-time sync progress for UI polling."""
+    status: str = "idle"  # idle, fetching, syncing, completed, error
+    project_key: str = ""
+    fetched: int = 0
+    synced: int = 0
+    total_estimated: int = 0
+    current_batch: int = 0
+    message: str = ""
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None

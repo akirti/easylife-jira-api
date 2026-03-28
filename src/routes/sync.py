@@ -2,6 +2,7 @@
 
 All endpoints require admin role via require_admin dependency.
 """
+import asyncio
 import logging
 from typing import Annotated, Any, Dict, List, Optional
 
@@ -9,7 +10,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from src.auth import CurrentUser, require_admin
 from src.db import COLL_SYNC_CONFIG, get_db
-from src.models import ArchiveRecord, JiraSyncConfig, SyncTriggerResponse
+from src.models import ArchiveRecord, JiraSyncConfig, SyncProgress, SyncTriggerResponse
+from src.services.jira_sync import get_sync_progress, clear_sync_progress
 
 logger = logging.getLogger(__name__)
 
@@ -39,37 +41,71 @@ def _get_sync_service():
     return _sync_service
 
 
+async def _run_sync_background(project_key: str, days: int) -> None:
+    """Background task that runs the sync and logs errors."""
+    sync_service = _get_sync_service()
+    try:
+        count = await sync_service.sync_project(project_key, days)
+        logger.info("Background sync completed for %s: %d issues", project_key, count)
+    except Exception as exc:
+        logger.error("Background sync failed for %s: %s", project_key, exc)
+
+
 @router.post(
     "/trigger",
     response_model=SyncTriggerResponse,
     responses={
         401: {"description": "Unauthorized"},
         403: {"description": "Admin access required"},
-        500: {"description": "Sync failed"},
+        409: {"description": "Sync already in progress"},
     },
 )
 async def trigger_sync(
     admin: Annotated[CurrentUser, Depends(require_admin)],
     project_key: str = Query(default="SCEN", description="Jira project key"),
-    months: int = Query(default=3, ge=1, le=24, description="Months of history to sync"),
+    days: int = Query(default=90, ge=1, le=730, description="Days of history to sync"),
 ) -> SyncTriggerResponse:
-    """Trigger a manual Jira sync for a project."""
-    sync_service = _get_sync_service()
-    try:
-        count = await sync_service.sync_project(project_key, months)
-        logger.info("Sync triggered by %s for %s: %d issues", admin.email, project_key, count)
-        return SyncTriggerResponse(
-            status="completed",
-            project_key=project_key,
-            issues_synced=count,
-            message=f"Successfully synced {count} issues",
-        )
-    except Exception as exc:
-        logger.error("%s for %s: %s", ERR_SYNC_FAILED, project_key, exc)
+    """Trigger a manual Jira sync for a project (runs in background)."""
+    # Check if sync is already running for this project
+    progress = get_sync_progress(project_key)
+    if progress and progress.get("status") in ("fetching", "syncing"):
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"{ERR_SYNC_FAILED}: {exc}",
-        ) from exc
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Sync already in progress for {project_key}",
+        )
+
+    # Clear any stale progress
+    clear_sync_progress(project_key)
+
+    # Launch sync as background task
+    asyncio.create_task(_run_sync_background(project_key, days))
+
+    logger.info("Sync triggered by %s for %s (%d days)", admin.email, project_key, days)
+    return SyncTriggerResponse(
+        status="started",
+        project_key=project_key,
+        issues_synced=0,
+        message=f"Sync started for {project_key} ({days} days). Poll /sync/progress for updates.",
+    )
+
+
+@router.get(
+    "/progress",
+    response_model=SyncProgress,
+    responses={
+        401: {"description": "Unauthorized"},
+        403: {"description": "Admin access required"},
+    },
+)
+async def sync_progress(
+    admin: Annotated[CurrentUser, Depends(require_admin)],
+    project_key: str = Query(default="SCEN"),
+) -> SyncProgress:
+    """Get real-time sync progress for a project."""
+    progress = get_sync_progress(project_key)
+    if not progress:
+        return SyncProgress(status="idle", project_key=project_key, message="No sync in progress")
+    return SyncProgress(**progress)
 
 
 @router.get(
