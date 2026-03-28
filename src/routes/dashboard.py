@@ -194,9 +194,10 @@ async def get_timeline(
     now_iso = datetime.now(timezone.utc).isoformat()
     entries = []
     for issue in issues:
+        due = issue.get("due_date")
         is_overdue = (
-            issue.get("due_date") is not None
-            and issue["due_date"] < now_iso
+            isinstance(due, str)
+            and due < now_iso
             and issue.get("resolution_date") is None
         )
         entries.append(TimelineEntry(
