@@ -31,7 +31,7 @@ def admin_headers():
 def mock_db():
     db = MagicMock()
     colls = {}
-    for name in ["jira_issues", "rollups_current", "rollups_snapshots"]:
+    for name in ["jira_issues", "rollups_current", "rollups_snapshots", "status_transitions"]:
         coll = AsyncMock()
         cursor = AsyncMock()
         cursor.to_list = AsyncMock(return_value=[])
@@ -205,3 +205,20 @@ class TestRecompute:
         assert resp.status_code == 200
         body = resp.json()
         assert "capabilities_computed" in body
+
+
+class TestCycleMetrics:
+    @pytest.mark.asyncio
+    async def test_empty_transitions(self, client, auth_headers, mock_db):
+        cursor = AsyncMock()
+        cursor.to_list = AsyncMock(return_value=[])
+        mock_db._colls["status_transitions"] = AsyncMock()
+        mock_db._colls["status_transitions"].find = MagicMock(
+            return_value=MagicMock(sort=MagicMock(return_value=cursor)))
+
+        resp = await client.get("/api/v1/portfolio/issues/TEST-1/cycle",
+                                headers=auth_headers)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["issue_key"] == "TEST-1"
+        assert body["total_days"] == 0

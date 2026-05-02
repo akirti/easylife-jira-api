@@ -11,7 +11,8 @@ from pydantic import BaseModel
 from src.auth import CurrentUser, get_current_user, require_admin
 from src.config import Config
 import src.db as _db_mod
-from src.db import COLL_JIRA_ISSUES, COLL_ROLLUPS_CURRENT
+from src.db import COLL_JIRA_ISSUES, COLL_ROLLUPS_CURRENT, COLL_STATUS_TRANSITIONS
+from src.services.cycle_time_service import CycleTimeService
 from src.models import (
     CapabilitySummary,
     CapabilityTree,
@@ -263,3 +264,29 @@ async def recompute_rollups(
     engine = _get_engine()
     result = await engine.recompute_all(project_key)
     return result
+
+
+@router.get("/issues/{key}/cycle")
+async def get_issue_cycle_metrics(
+    key: str,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+) -> Dict[str, Any]:
+    """Get cycle time metrics for a specific issue."""
+    db = _db_mod.get_db()
+
+    # Fetch transitions for this issue
+    transitions_coll = db[COLL_STATUS_TRANSITIONS]
+    cursor = transitions_coll.find(
+        {"issue_key": key}, {"_id": 0}
+    ).sort("changed_at", 1)
+    transitions = await cursor.to_list(length=1000)
+
+    if not transitions:
+        return {"issue_key": key, "dev_days": 0, "qa_days": 0,
+                "stage_days": 0, "prod_days": 0, "total_days": 0}
+
+    buckets = _config.get("portfolio.cycle_time_buckets", {}) if _config else {}
+    service = CycleTimeService(buckets)
+    metrics = service.compute_cycle_metrics(transitions)
+    metrics["issue_key"] = key
+    return metrics
