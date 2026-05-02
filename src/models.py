@@ -117,7 +117,7 @@ class CanvasEdge(BaseModel):
     style: Dict[str, Any] = Field(default_factory=dict)
 
 
-class EpicSummary(BaseModel):
+class CanvasEpicSummary(BaseModel):
     """Minimal epic info for the filter dropdown."""
     key: str
     summary: str = ""
@@ -127,7 +127,7 @@ class CanvasResponse(BaseModel):
     """Combined canvas data for the frontend."""
     nodes: List[CanvasNode] = Field(default_factory=list)
     edges: List[CanvasEdge] = Field(default_factory=list)
-    epics: List[EpicSummary] = Field(default_factory=list)
+    epics: List[CanvasEpicSummary] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -254,3 +254,130 @@ class SyncProgress(BaseModel):
     message: str = ""
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Portfolio Rollup Models
+# ---------------------------------------------------------------------------
+
+class RollupValues(BaseModel):
+    """Aggregated point totals for a capability or epic."""
+    cumulative_points: float = 0
+    remaining_points: float = 0
+    tshirt_rollup_points: Optional[float] = None
+    direct_child_count: int = 0
+    descendant_count: int = 0
+    computed_at: Optional[str] = None
+
+
+class EpicSummary(BaseModel):
+    """Portfolio epic with rollup data and t-shirt sizing."""
+    key: str
+    summary: str
+    status: str
+    issue_type: str = "Epic"
+    tshirt_size: Optional[str] = None
+    uses_tshirt_fallback: bool = False
+    tshirt_contribution_points: Optional[float] = None
+    rollups: RollupValues = Field(default_factory=RollupValues)
+
+
+class CapabilitySummary(BaseModel):
+    """Portfolio capability summary with rollup data."""
+    key: str
+    summary: str
+    status: str
+    issue_type: str = "Capability"
+    tshirt_size: Optional[str] = None
+    project_key: str = ""
+    rollups: RollupValues = Field(default_factory=RollupValues)
+
+
+class CapabilityTree(CapabilitySummary):
+    """Capability with its child epics expanded."""
+    epics: List[EpicSummary] = Field(default_factory=list)
+
+
+class StoryItem(BaseModel):
+    """Individual story/task within a portfolio view."""
+    key: str
+    summary: str
+    status: str
+    status_category: str = ""
+    issue_type: str = ""
+    story_points: Optional[float] = None
+    assignee: str = ""
+    sprint: str = ""
+    priority: str = ""
+    in_remaining: bool = False
+    target_start: Optional[str] = None
+    target_end: Optional[str] = None
+    days_to_done: Optional[float] = None
+
+
+class SnapshotPoint(BaseModel):
+    """Single data point in a time-series snapshot."""
+    week: str
+    value: float
+
+
+class SnapshotSeries(BaseModel):
+    """Time-series of snapshot points for a capability/epic."""
+    key: str
+    metric: str
+    series: List[SnapshotPoint] = Field(default_factory=list)
+
+
+class PortfolioListResponse(BaseModel):
+    """Paginated list of portfolio capabilities."""
+    data: List[CapabilitySummary] = Field(default_factory=list)
+    total: int = 0
+    page: int = 1
+    page_size: int = 20
+    has_more: bool = False
+
+
+class CycleMetrics(BaseModel):
+    """Cycle-time metrics for an issue across workflow stages."""
+    issue_key: str
+    dev_days: float = 0
+    qa_days: float = 0
+    stage_days: float = 0
+    prod_days: float = 0
+    total_days: float = 0
+    computed_at: Optional[str] = None
+
+
+class StatusTransition(BaseModel):
+    """Record of a status change for an issue."""
+    issue_key: str
+    from_status: str
+    to_status: str
+    changed_at: str
+
+
+class RelatedLink(BaseModel):
+    """A linked issue in the portfolio context."""
+    key: str
+    summary: str = ""
+    status: str = ""
+    issue_type: str = ""
+    link_type: str = ""
+    direction: str = ""
+
+
+class RelatedItems(BaseModel):
+    """Subtasks, links, and test cases related to an issue."""
+    subtasks: List[StoryItem] = Field(default_factory=list)
+    links: List[RelatedLink] = Field(default_factory=list)
+    tests: List[RelatedLink] = Field(default_factory=list)
+
+
+class ExportRequest(BaseModel):
+    """Request to export portfolio data."""
+    project_key: str
+    view: str = "progress"
+    filter: str = "all"
+    search: Optional[str] = None
+    expanded: List[str] = Field(default_factory=list)
+    format: str = "docx"

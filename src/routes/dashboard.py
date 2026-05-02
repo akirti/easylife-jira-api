@@ -18,7 +18,7 @@ from src.models import (
     CanvasNode,
     CanvasNodeData,
     CanvasResponse,
-    EpicSummary,
+    CanvasEpicSummary,
     DashboardStats,
     IssueListResponse,
     JiraIssueDoc,
