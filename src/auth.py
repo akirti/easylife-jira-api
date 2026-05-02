@@ -1,12 +1,13 @@
 """JWT token validation — validates tokens issued by the main backend.
 
 Uses shared secret_key, algorithm, issuer, audience from config.
+Supports both Authorization: Bearer header and access_token httpOnly cookie.
 """
 import logging
-from typing import Annotated, Any, Dict, List
+from typing import Annotated, Any, Dict, List, Optional
 
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from src.config import Config
@@ -99,11 +100,27 @@ def decode_token(token: str) -> Dict[str, Any]:
 
 
 async def get_current_user(
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)],
+    request: Request,
+    credentials: Annotated[
+        Optional[HTTPAuthorizationCredentials], Depends(HTTPBearer(auto_error=False))
+    ] = None,
 ) -> CurrentUser:
-    """FastAPI dependency — extract and validate JWT from Authorization header."""
-    payload = decode_token(credentials.credentials)
-    return CurrentUser(payload)
+    """FastAPI dependency — extract JWT from Authorization header or access_token cookie."""
+    # 1. Try Bearer token from Authorization header
+    if credentials and credentials.credentials:
+        payload = decode_token(credentials.credentials)
+        return CurrentUser(payload)
+
+    # 2. Fallback: try access_token httpOnly cookie (set by main backend on login)
+    cookie_token = request.cookies.get("access_token")
+    if cookie_token:
+        payload = decode_token(cookie_token)
+        return CurrentUser(payload)
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Not authenticated",
+    )
 
 
 async def require_admin(
