@@ -1,11 +1,12 @@
 """Tests for src/routes/sync.py — Sync API endpoints."""
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from src.routes.sync import init_sync_routes
+from src.routes.sync import init_sync_routes, _run_sync_background
 
 
 class TestSyncRouteHelpers:
@@ -19,12 +20,71 @@ class TestSyncRouteHelpers:
         assert _sync_service is mock_service
 
 
+class TestRunSyncBackground:
+    """Tests for the _run_sync_background retry logic."""
+
+    @pytest.mark.asyncio
+    async def test_sync_succeeds_first_attempt(self):
+        """Background sync completes on first attempt."""
+        mock_service = AsyncMock()
+        mock_service.sync_project = AsyncMock(return_value=42)
+        init_sync_routes(mock_service)
+
+        await _run_sync_background("TEST", 90)
+        mock_service.sync_project.assert_called_once_with("TEST", 90)
+
+    @pytest.mark.asyncio
+    async def test_sync_retries_on_failure(self):
+        """Background sync retries with backoff on transient failure."""
+        mock_service = AsyncMock()
+        mock_service.sync_project = AsyncMock(
+            side_effect=[RuntimeError("transient"), 10]
+        )
+        init_sync_routes(mock_service)
+
+        with patch("src.routes.sync.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            await _run_sync_background("TEST", 30)
+
+        assert mock_service.sync_project.call_count == 2
+        mock_sleep.assert_called_once_with(1)  # 2^0 = 1
+
+    @pytest.mark.asyncio
+    async def test_sync_exhausts_retries(self):
+        """Background sync logs error after all retries exhausted."""
+        mock_service = AsyncMock()
+        mock_service.sync_project = AsyncMock(
+            side_effect=RuntimeError("persistent failure")
+        )
+        init_sync_routes(mock_service)
+
+        with patch("src.routes.sync.asyncio.sleep", new_callable=AsyncMock):
+            await _run_sync_background("TEST", 30, max_retries=3)
+
+        assert mock_service.sync_project.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_sync_backoff_timing(self):
+        """Backoff waits increase exponentially: 1s, 2s."""
+        mock_service = AsyncMock()
+        mock_service.sync_project = AsyncMock(
+            side_effect=[RuntimeError("e1"), RuntimeError("e2"), 5]
+        )
+        init_sync_routes(mock_service)
+
+        with patch("src.routes.sync.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            await _run_sync_background("TEST", 30, max_retries=3)
+
+        assert mock_sleep.call_count == 2
+        mock_sleep.assert_any_call(1)   # 2^0
+        mock_sleep.assert_any_call(2)   # 2^1
+
+
 class TestTriggerSync:
     """Tests for POST /sync/trigger endpoint."""
 
     @pytest.mark.asyncio
     async def test_trigger_sync_success(self, app_client, admin_headers, mock_db):
-        """Admin can trigger sync successfully."""
+        """Admin can trigger sync — returns started status (background task)."""
         mock_service = AsyncMock()
         mock_service.sync_project = AsyncMock(return_value=42)
         init_sync_routes(mock_service)
@@ -35,14 +95,14 @@ class TestTriggerSync:
         )
         assert response.status_code == 200
         data = response.json()
-        assert data["issues_synced"] == 42
-        assert data["status"] == "completed"
+        assert data["status"] == "started"
+        assert data["project_key"] == "TEST"
 
     @pytest.mark.asyncio
     async def test_trigger_sync_unauthorized(self, app_client):
-        """No auth header returns 401 (no bearer)."""
+        """No auth header returns 403 (forbidden)."""
         response = await app_client.post("/api/v1/sync/trigger")
-        assert response.status_code == 401
+        assert response.status_code == 403
 
     @pytest.mark.asyncio
     async def test_trigger_sync_non_admin(self, app_client, auth_headers):
@@ -57,31 +117,19 @@ class TestTriggerSync:
         assert response.status_code == 403
 
     @pytest.mark.asyncio
-    async def test_trigger_sync_failure(self, app_client, admin_headers):
-        """Sync failure returns 500."""
-        mock_service = AsyncMock()
-        mock_service.sync_project = AsyncMock(side_effect=RuntimeError("Jira down"))
-        init_sync_routes(mock_service)
-
-        response = await app_client.post(
-            "/api/v1/sync/trigger?project_key=TEST",
-            headers=admin_headers,
-        )
-        assert response.status_code == 500
-
-    @pytest.mark.asyncio
-    async def test_trigger_sync_custom_months(self, app_client, admin_headers):
-        """Custom months parameter is passed through."""
+    async def test_trigger_sync_custom_days(self, app_client, admin_headers, mock_db):
+        """Custom days parameter is accepted."""
         mock_service = AsyncMock()
         mock_service.sync_project = AsyncMock(return_value=10)
         init_sync_routes(mock_service)
 
         response = await app_client.post(
-            "/api/v1/sync/trigger?project_key=TEST&months=6",
+            "/api/v1/sync/trigger?project_key=TEST&days=30",
             headers=admin_headers,
         )
         assert response.status_code == 200
-        mock_service.sync_project.assert_called_once_with("TEST", 6)
+        data = response.json()
+        assert data["status"] == "started"
 
 
 class TestGetSyncConfig:
@@ -109,15 +157,16 @@ class TestGetSyncConfig:
         assert response.json()["project_key"] == "TEST"
 
     @pytest.mark.asyncio
-    async def test_get_config_not_found(self, app_client, admin_headers, mock_db):
-        """Returns 404 when config not found."""
+    async def test_get_config_not_found_returns_default(self, app_client, admin_headers, mock_db):
+        """Returns default config (200) when no persisted config exists."""
         mock_db["jira_sync_config"].find_one = AsyncMock(return_value=None)
 
         response = await app_client.get(
             "/api/v1/sync/config?project_key=UNKNOWN",
             headers=admin_headers,
         )
-        assert response.status_code == 404
+        assert response.status_code == 200
+        assert response.json()["project_key"] == "UNKNOWN"
 
 
 class TestUpdateSyncConfig:

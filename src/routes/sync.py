@@ -41,14 +41,27 @@ def _get_sync_service():
     return _sync_service
 
 
-async def _run_sync_background(project_key: str, days: int) -> None:
-    """Background task that runs the sync and logs errors."""
+async def _run_sync_background(project_key: str, days: int, max_retries: int = 3) -> None:
+    """Background task that runs the sync with retry and backoff."""
     sync_service = _get_sync_service()
-    try:
-        count = await sync_service.sync_project(project_key, days)
-        logger.info("Background sync completed for %s: %d issues", project_key, count)
-    except Exception as exc:
-        logger.error("Background sync failed for %s: %s", project_key, exc)
+    for attempt in range(max_retries):
+        try:
+            count = await sync_service.sync_project(project_key, days)
+            logger.info("Background sync completed for %s: %d issues", project_key, count)
+            return
+        except Exception as exc:
+            if attempt < max_retries - 1:
+                wait = 2 ** attempt  # 1s, 2s, 4s
+                logger.warning(
+                    "Sync attempt %d/%d failed for %s, retrying in %ds: %s",
+                    attempt + 1, max_retries, project_key, wait, exc,
+                )
+                await asyncio.sleep(wait)
+            else:
+                logger.error(
+                    "Sync permanently failed for %s after %d attempts: %s",
+                    project_key, max_retries, exc,
+                )
 
 
 @router.post(
