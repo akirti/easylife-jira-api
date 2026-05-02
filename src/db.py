@@ -35,7 +35,17 @@ async def connect_db(config: Config) -> AsyncIOMotorDatabase:
     db_name = config.get("database.name", "easylife_jira")
 
     logger.info("Connecting to MongoDB at %s, database=%s", mongo_uri, db_name)
-    _client = AsyncIOMotorClient(mongo_uri)
+    _client = AsyncIOMotorClient(
+        mongo_uri,
+        maxPoolSize=200,
+        minPoolSize=25,
+        maxIdleTimeMS=45000,
+        serverSelectionTimeoutMS=5000,
+        connectTimeoutMS=10000,
+        socketTimeoutMS=20000,
+        retryWrites=True,
+        retryReads=True,
+    )
     _db = _client[db_name]
 
     await _create_indexes(_db)

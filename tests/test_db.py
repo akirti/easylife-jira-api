@@ -52,8 +52,43 @@ class TestConnectDB:
 
             await db_module.connect_db(test_config)
 
-            mock_motor.assert_called_once_with("mongodb://localhost:27017")
+            mock_motor.assert_called_once()
+            call_args = mock_motor.call_args
+            assert call_args[0][0] == "mongodb://localhost:27017"
             mock_client.__getitem__.assert_called_with("easylife_jira_test")
+
+
+    @pytest.mark.asyncio
+    async def test_connect_db_sets_pool_parameters(self, test_config):
+        """AsyncIOMotorClient is created with connection pool and timeout settings."""
+        mock_client = MagicMock()
+        mock_database = MagicMock()
+        mock_client.__getitem__ = MagicMock(return_value=mock_database)
+
+        mock_collection = MagicMock()
+        mock_collection.create_index = AsyncMock()
+        mock_database.__getitem__ = MagicMock(return_value=mock_collection)
+
+        with patch("src.db.AsyncIOMotorClient") as mock_motor:
+            mock_motor.return_value = mock_client
+            db_module._client = None
+            db_module._db = None
+
+            await db_module.connect_db(test_config)
+
+            call_kwargs = mock_motor.call_args[1]
+            assert call_kwargs["maxPoolSize"] == 200
+            assert call_kwargs["minPoolSize"] == 25
+            assert call_kwargs["maxIdleTimeMS"] == 45000
+            assert call_kwargs["serverSelectionTimeoutMS"] == 5000
+            assert call_kwargs["connectTimeoutMS"] == 10000
+            assert call_kwargs["socketTimeoutMS"] == 20000
+            assert call_kwargs["retryWrites"] is True
+            assert call_kwargs["retryReads"] is True
+
+            # Reset module state
+            db_module._client = None
+            db_module._db = None
 
 
 class TestCreateIndexes:
