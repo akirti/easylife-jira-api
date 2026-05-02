@@ -55,10 +55,11 @@ async def _update_progress(project_key: str, updates: Dict[str, Any]) -> None:
 class JiraSyncService:
     """Synchronizes Jira issues to MongoDB and manages archival."""
 
-    def __init__(self, config: Config, jira_client: JiraClient, gcs_client: GCSClient):
+    def __init__(self, config: Config, jira_client: JiraClient, gcs_client: GCSClient, rollup_engine=None):
         self._config = config
         self._jira = jira_client
         self._gcs = gcs_client
+        self._rollup_engine = rollup_engine
 
     async def sync_project(
         self,
@@ -177,6 +178,15 @@ class JiraSyncService:
             })
 
             logger.info("Synced %d issues for %s", synced_count, project_key)
+
+            # Post-sync: recompute portfolio rollups
+            if self._rollup_engine:
+                try:
+                    await self._rollup_engine.recompute_all(project_key)
+                    logger.info("Post-sync rollup recompute completed for %s", project_key)
+                except Exception as exc:
+                    logger.error("Rollup recompute failed for %s: %s", project_key, exc)
+
             return synced_count
 
         except Exception as exc:

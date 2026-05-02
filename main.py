@@ -59,11 +59,12 @@ async def lifespan(app: FastAPI):
 
     jira_client = JiraClient(config)
     gcs_client = GCSClient(config)
-    sync_service = JiraSyncService(config, jira_client, gcs_client)
+    rollup_engine = RollupEngine(config)
+    sync_service = JiraSyncService(config, jira_client, gcs_client, rollup_engine=rollup_engine)
 
     init_sync_routes(sync_service)
     init_issue_routes(jira_client, config)
-    init_portfolio_routes(RollupEngine(config), SnapshotService(), config)
+    init_portfolio_routes(rollup_engine, SnapshotService(), config)
 
     # Log Jira config status (don't validate connectivity — it blocks the event loop)
     jira_base = config.get("jira.base_url", "")

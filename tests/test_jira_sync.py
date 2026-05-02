@@ -390,6 +390,65 @@ class TestJiraSyncServiceBuildIssueUrl:
         assert url == ""
 
 
+class TestSyncTriggersRollupRecompute:
+    """Tests for post-sync rollup recomputation."""
+
+    @pytest.mark.asyncio
+    async def test_sync_triggers_rollup_recompute(self, test_config, mock_jira_client, mock_db):
+        """After sync completes, rollup engine recompute_all is called."""
+        mock_rollup = AsyncMock()
+        mock_rollup.recompute_all = AsyncMock(return_value={
+            "capabilities_computed": 1, "epics_computed": 2, "stories_processed": 10
+        })
+
+        inner_client = MagicMock()
+        inner_client.search_issues = MagicMock(return_value=[])
+        mock_jira_client._get_client = MagicMock(return_value=inner_client)
+        gcs_client = MagicMock()
+
+        service = JiraSyncService(test_config, mock_jira_client, gcs_client, rollup_engine=mock_rollup)
+
+        with patch("src.services.jira_sync.get_db", return_value=mock_db):
+            await service.sync_project("PROJ", days_back=1)
+
+        mock_rollup.recompute_all.assert_called_once_with("PROJ")
+
+    @pytest.mark.asyncio
+    async def test_sync_without_rollup_engine(self, test_config, mock_jira_client, mock_db):
+        """Sync completes normally when no rollup engine is provided."""
+        inner_client = MagicMock()
+        inner_client.search_issues = MagicMock(return_value=[])
+        mock_jira_client._get_client = MagicMock(return_value=inner_client)
+        gcs_client = MagicMock()
+
+        service = JiraSyncService(test_config, mock_jira_client, gcs_client)
+
+        with patch("src.services.jira_sync.get_db", return_value=mock_db):
+            count = await service.sync_project("PROJ", days_back=1)
+
+        assert count == 0
+
+    @pytest.mark.asyncio
+    async def test_sync_rollup_failure_does_not_break_sync(self, test_config, mock_jira_client, mock_db):
+        """Rollup failure is logged but does not raise from sync_project."""
+        mock_rollup = AsyncMock()
+        mock_rollup.recompute_all = AsyncMock(side_effect=RuntimeError("rollup boom"))
+
+        inner_client = MagicMock()
+        inner_client.search_issues = MagicMock(return_value=[])
+        mock_jira_client._get_client = MagicMock(return_value=inner_client)
+        gcs_client = MagicMock()
+
+        service = JiraSyncService(test_config, mock_jira_client, gcs_client, rollup_engine=mock_rollup)
+
+        with patch("src.services.jira_sync.get_db", return_value=mock_db):
+            count = await service.sync_project("PROJ", days_back=1)
+
+        # Sync should still return successfully
+        assert count == 0
+        mock_rollup.recompute_all.assert_called_once_with("PROJ")
+
+
 class TestComputeDaysFromChangelog:
     """Tests for JiraSyncService._compute_days_from_changelog method."""
 
