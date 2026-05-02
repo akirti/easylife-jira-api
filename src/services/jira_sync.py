@@ -11,8 +11,10 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from pymongo import UpdateOne
+
 from src.config import Config
-from src.db import COLL_ARCHIVES, COLL_JIRA_ISSUES, COLL_SYNC_CONFIG, get_db
+from src.db import COLL_ARCHIVES, COLL_JIRA_ISSUES, COLL_SYNC_CONFIG, COLL_SYNC_PROGRESS, get_db
 from src.services.attribute_mapper import map_issue
 from src.services.gcs import GCSClient
 from src.services.jira_client import JiraClient
@@ -25,18 +27,29 @@ JSONL_EXTENSION = ".jsonl.gz"
 BATCH_SIZE = 100
 
 
-# In-memory sync progress tracker (keyed by project_key)
-_sync_progress: Dict[str, Dict[str, Any]] = {}
-
-
-def get_sync_progress(project_key: str) -> Optional[Dict[str, Any]]:
+async def get_sync_progress(project_key: str) -> Optional[Dict[str, Any]]:
     """Get current sync progress for a project."""
-    return _sync_progress.get(project_key)
+    db = get_db()
+    doc = await db[COLL_SYNC_PROGRESS].find_one(
+        {"project_key": project_key}, {"_id": 0}
+    )
+    return doc
 
 
-def clear_sync_progress(project_key: str) -> None:
+async def clear_sync_progress(project_key: str) -> None:
     """Clear sync progress for a project."""
-    _sync_progress.pop(project_key, None)
+    db = get_db()
+    await db[COLL_SYNC_PROGRESS].delete_one({"project_key": project_key})
+
+
+async def _update_progress(project_key: str, updates: Dict[str, Any]) -> None:
+    """Upsert sync progress for a project in MongoDB."""
+    db = get_db()
+    await db[COLL_SYNC_PROGRESS].update_one(
+        {"project_key": project_key},
+        {"$set": {**updates, "updated_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True,
+    )
 
 
 class JiraSyncService:
@@ -73,7 +86,7 @@ class JiraSyncService:
         logger.info("Starting sync for %s (JQL: %s)", project_key, jql)
 
         # Initialize progress
-        _sync_progress[project_key] = {
+        await _update_progress(project_key, {
             "status": "fetching",
             "project_key": project_key,
             "fetched": 0,
@@ -82,11 +95,12 @@ class JiraSyncService:
             "current_batch": 0,
             "message": "Fetching issues from Jira...",
             "started_at": datetime.now(timezone.utc).isoformat(),
-        }
+        })
 
         db = get_db()
         collection = db[COLL_JIRA_ISSUES]
         synced_count = 0
+        total_estimated = 0
         now = datetime.now(timezone.utc)
 
         try:
@@ -112,30 +126,30 @@ class JiraSyncService:
                 fetched_so_far = start_at + len(batch)
 
                 # Update progress — fetching
-                _sync_progress[project_key].update({
+                total_estimated = max(fetched_so_far, total_estimated)
+                await _update_progress(project_key, {
                     "status": "syncing",
                     "fetched": fetched_so_far,
-                    "total_estimated": max(fetched_so_far, _sync_progress[project_key]["total_estimated"]),
+                    "total_estimated": total_estimated,
                     "current_batch": batch_num,
                     "message": f"Processing batch {batch_num} ({fetched_so_far} issues fetched)...",
                 })
 
-                # Map and upsert this batch
+                # Map and bulk-upsert this batch
+                bulk_ops = []
                 for raw_issue in batch:
                     doc = map_issue(raw_issue, attribute_map)
                     doc["synced_at"] = now
                     doc["url"] = self._build_issue_url(raw_issue.key)
                     doc["days_in_status"] = self._compute_days_from_changelog(raw_issue)
+                    bulk_ops.append(UpdateOne({"key": doc["key"]}, {"$set": doc}, upsert=True))
 
-                    await collection.update_one(
-                        {"key": doc["key"]},
-                        {"$set": doc},
-                        upsert=True,
-                    )
-                    synced_count += 1
+                if bulk_ops:
+                    await collection.bulk_write(bulk_ops, ordered=False)
+                synced_count += len(batch)
 
                 # Update progress — batch done
-                _sync_progress[project_key].update({
+                await _update_progress(project_key, {
                     "synced": synced_count,
                     "message": f"Synced {synced_count} issues ({batch_num} batches)...",
                 })
@@ -154,7 +168,7 @@ class JiraSyncService:
             await self._update_sync_config(project_key, now, synced_count)
 
             # Final progress
-            _sync_progress[project_key].update({
+            await _update_progress(project_key, {
                 "status": "completed",
                 "synced": synced_count,
                 "total_estimated": synced_count,
@@ -166,7 +180,7 @@ class JiraSyncService:
             return synced_count
 
         except Exception as exc:
-            _sync_progress[project_key].update({
+            await _update_progress(project_key, {
                 "status": "error",
                 "synced": synced_count,
                 "message": f"Sync failed after {synced_count} issues: {exc}",

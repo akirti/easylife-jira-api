@@ -155,12 +155,14 @@ class TestJiraSyncServiceSync:
     @pytest.mark.asyncio
     async def test_sync_empty_results(self, test_config, mock_jira_client, mock_db):
         """Sync with no Jira issues results in 0 synced."""
-        mock_jira_client.search_issues.return_value = []
+        inner_client = MagicMock()
+        inner_client.search_issues = MagicMock(return_value=[])
+        mock_jira_client._get_client = MagicMock(return_value=inner_client)
         gcs_client = MagicMock()
 
         with patch("src.services.jira_sync.get_db", return_value=mock_db):
             service = JiraSyncService(test_config, mock_jira_client, gcs_client)
-            count = await service.sync_project("TEST", months_back=3)
+            count = await service.sync_project("TEST", days_back=90)
 
         assert count == 0
 
@@ -200,7 +202,9 @@ class TestJiraSyncServiceSync:
         mock_issue.changelog = MagicMock()
         mock_issue.changelog.histories = []
 
-        mock_jira_client.search_issues.return_value = [mock_issue]
+        inner_client = MagicMock()
+        inner_client.search_issues = MagicMock(return_value=[mock_issue])
+        mock_jira_client._get_client = MagicMock(return_value=inner_client)
         gcs_client = MagicMock()
 
         with patch("src.services.jira_sync.get_db", return_value=mock_db):
@@ -208,7 +212,7 @@ class TestJiraSyncServiceSync:
             count = await service.sync_project("TEST")
 
         assert count == 1
-        mock_db["jira_issues"].update_one.assert_called_once()
+        mock_db["jira_issues"].bulk_write.assert_called_once()
 
 
 class TestJiraSyncServiceArchive:

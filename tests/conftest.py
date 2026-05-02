@@ -197,10 +197,18 @@ def mock_db():
     archive_cursor.sort = MagicMock(return_value=archive_cursor)
     archives_coll.find = MagicMock(return_value=archive_cursor)
 
+    # jira_sync_progress collection
+    progress_coll = AsyncMock()
+    progress_coll.find_one = AsyncMock(return_value=None)
+    progress_coll.update_one = AsyncMock()
+    progress_coll.delete_one = AsyncMock()
+    progress_coll.create_index = AsyncMock()
+
     db.__getitem__ = MagicMock(side_effect=lambda name: {
         "jira_issues": issues_coll,
         "jira_sync_config": sync_coll,
         "jira_issue_archives": archives_coll,
+        "jira_sync_progress": progress_coll,
     }.get(name, AsyncMock()))
 
     db.command = AsyncMock(return_value={"ok": 1})

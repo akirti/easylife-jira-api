@@ -80,7 +80,7 @@ async def trigger_sync(
 ) -> SyncTriggerResponse:
     """Trigger a manual Jira sync for a project (runs in background)."""
     # Check if sync is already running for this project
-    progress = get_sync_progress(project_key)
+    progress = await get_sync_progress(project_key)
     if progress and progress.get("status") in ("fetching", "syncing"):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -88,7 +88,7 @@ async def trigger_sync(
         )
 
     # Clear any stale progress
-    clear_sync_progress(project_key)
+    await clear_sync_progress(project_key)
 
     # Launch sync as background task
     asyncio.create_task(_run_sync_background(project_key, days))
@@ -115,7 +115,7 @@ async def sync_progress(
     project_key: str = Query(default="SCEN"),
 ) -> SyncProgress:
     """Get real-time sync progress for a project."""
-    progress = get_sync_progress(project_key)
+    progress = await get_sync_progress(project_key)
     if not progress:
         return SyncProgress(status="idle", project_key=project_key, message="No sync in progress")
     return SyncProgress(**progress)

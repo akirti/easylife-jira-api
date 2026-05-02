@@ -33,6 +33,7 @@ _db: Optional[AsyncIOMotorDatabase] = None
 COLL_JIRA_ISSUES = "jira_issues"
 COLL_SYNC_CONFIG = "jira_sync_config"
 COLL_ARCHIVES = "jira_issue_archives"
+COLL_SYNC_PROGRESS = "jira_sync_progress"
 
 
 async def connect_db(config: Config) -> AsyncIOMotorDatabase:
@@ -93,6 +94,9 @@ async def _create_indexes(db: AsyncIOMotorDatabase) -> None:
         archives = db[COLL_ARCHIVES]
         await archives.create_index("project_key")
         await archives.create_index("archived_at")
+
+        progress = db[COLL_SYNC_PROGRESS]
+        await progress.create_index("project_key", unique=True)
     except Exception as exc:
         logger.warning("Index creation failed (may require auth): %s", exc)
 
