@@ -290,3 +290,59 @@ async def get_issue_cycle_metrics(
     metrics = service.compute_cycle_metrics(transitions)
     metrics["issue_key"] = key
     return metrics
+
+
+@router.get("/issues/{key}/related")
+async def get_related_items(
+    key: str,
+    request: Request,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+) -> Dict[str, Any]:
+    """Get subtasks, linked issues, and test cases for a specific issue."""
+    db = _db_mod.get_db()
+    issues_coll = db[COLL_JIRA_ISSUES]
+
+    # Subtasks: issues where parent_key == this key and type is Sub-task
+    subtask_cursor = issues_coll.find(
+        {"parent_key": key, "issue_type": "Sub-task"},
+        {"_id": 0, "key": 1, "summary": 1, "status": 1, "status_category": 1,
+         "issue_type": 1, "story_points": 1, "assignee": 1}
+    )
+    subtasks = await subtask_cursor.to_list(length=50)
+
+    # Issue links from the issue's own document
+    issue_doc = await issues_coll.find_one({"key": key}, {"issue_links_detail": 1, "_id": 0})
+    links_raw = (issue_doc or {}).get("issue_links_detail", [])
+
+    # Separate test links from regular links
+    test_link_types = {"tested by", "is tested by", "tests", "xray", "zephyr"}
+    tests = []
+    links = []
+    for link in links_raw:
+        lt = (link.get("link_type") or "").lower()
+        entry = {
+            "key": link.get("target_key", ""),
+            "link_type": link.get("link_type", ""),
+            "direction": link.get("direction", ""),
+            "summary": "", "status": "", "issue_type": "",
+        }
+        # Try to enrich with issue data
+        linked_doc = await issues_coll.find_one(
+            {"key": entry["key"]},
+            {"summary": 1, "status": 1, "issue_type": 1, "_id": 0}
+        )
+        if linked_doc:
+            entry["summary"] = linked_doc.get("summary", "")
+            entry["status"] = linked_doc.get("status", "")
+            entry["issue_type"] = linked_doc.get("issue_type", "")
+
+        if any(t in lt for t in test_link_types):
+            tests.append(entry)
+        else:
+            links.append(entry)
+
+    return {
+        "subtasks": subtasks,
+        "links": links,
+        "tests": tests,
+    }

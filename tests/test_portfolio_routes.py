@@ -222,3 +222,20 @@ class TestCycleMetrics:
         body = resp.json()
         assert body["issue_key"] == "TEST-1"
         assert body["total_days"] == 0
+
+
+class TestRelatedItems:
+    @pytest.mark.asyncio
+    async def test_empty(self, client, auth_headers, mock_db):
+        mock_db._colls["jira_issues"].find_one = AsyncMock(return_value=None)
+        cursor = AsyncMock()
+        cursor.to_list = AsyncMock(return_value=[])
+        mock_db._colls["jira_issues"].find = MagicMock(return_value=cursor)
+
+        resp = await client.get("/api/v1/portfolio/issues/TEST-1/related",
+                                headers=auth_headers)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["subtasks"] == []
+        assert body["links"] == []
+        assert body["tests"] == []
