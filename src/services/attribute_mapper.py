@@ -63,8 +63,35 @@ def map_issue(raw_issue: Any, attribute_map: Dict[str, str]) -> Dict[str, Any]:
         "flagged": getattr(fields, "flagged", False) or False,
     }
 
-    # Issue links
+    # Fix versions
+    fix_versions_raw = getattr(fields, "fixVersions", None) or []
+    doc["fix_versions"] = [
+        getattr(v, "name", str(v)) for v in fix_versions_raw
+    ]
+
+    # Issue links (summary keys — existing)
     doc["linked_keys"] = _extract_linked_keys(fields)
+
+    # Issue links (detailed, for related items)
+    links_raw = getattr(fields, "issuelinks", None) or []
+    issue_links_detail = []
+    for link in links_raw:
+        link_type = getattr(link.type, "name", str(link.type)) if hasattr(link, "type") and link.type else ""
+        outward = getattr(link, "outwardIssue", None)
+        inward = getattr(link, "inwardIssue", None)
+        if outward:
+            issue_links_detail.append({
+                "link_type": link_type,
+                "direction": "outward",
+                "target_key": outward.key,
+            })
+        elif inward:
+            issue_links_detail.append({
+                "link_type": link_type,
+                "direction": "inward",
+                "target_key": inward.key,
+            })
+    doc["issue_links_detail"] = issue_links_detail
 
     # Custom field mapping from config
     for jira_field, domain_field in attribute_map.items():

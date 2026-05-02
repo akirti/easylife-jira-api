@@ -174,6 +174,55 @@ class TestMapIssue:
         doc = map_issue(issue, {})
         assert doc["description_text"] is None
 
+    def test_fix_versions_extracted(self):
+        """fixVersions are extracted as a list of version names."""
+        v1 = MagicMock()
+        v1.name = "v1.0"
+        v2 = MagicMock()
+        v2.name = "v2.0"
+        issue = _make_mock_issue()
+        issue.fields.fixVersions = [v1, v2]
+        result = map_issue(issue, {})
+        assert result["fix_versions"] == ["v1.0", "v2.0"]
+
+    def test_fix_versions_empty(self):
+        """Missing fixVersions returns empty list."""
+        issue = _make_mock_issue()
+        issue.fields.fixVersions = None
+        result = map_issue(issue, {})
+        assert result["fix_versions"] == []
+
+    def test_issue_links_detail_extracted(self):
+        """Issue links are extracted with type, direction, and target key."""
+        link1 = MagicMock()
+        link1.type.name = "Blocks"
+        link1.outwardIssue = MagicMock()
+        link1.outwardIssue.key = "PROJ-99"
+        link1.inwardIssue = None
+
+        link2 = MagicMock()
+        link2.type.name = "Relates"
+        link2.outwardIssue = None
+        link2.inwardIssue = MagicMock()
+        link2.inwardIssue.key = "PROJ-50"
+
+        issue = _make_mock_issue(issuelinks=[link1, link2])
+        result = map_issue(issue, {})
+        assert len(result["issue_links_detail"]) == 2
+        assert result["issue_links_detail"][0] == {
+            "link_type": "Blocks", "direction": "outward", "target_key": "PROJ-99"
+        }
+        assert result["issue_links_detail"][1] == {
+            "link_type": "Relates", "direction": "inward", "target_key": "PROJ-50"
+        }
+
+    def test_issue_links_detail_empty(self):
+        """Missing issuelinks returns empty list."""
+        issue = _make_mock_issue()
+        issue.fields.issuelinks = None
+        result = map_issue(issue, {})
+        assert result["issue_links_detail"] == []
+
 
 class TestExtractMentions:
     """Tests for the extract_mentions function."""
