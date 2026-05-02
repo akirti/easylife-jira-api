@@ -4,6 +4,7 @@ All endpoints require authenticated user via get_current_user.
 Data is served from MongoDB jira_issues collection.
 """
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Annotated, Any, Dict, List, Optional
 
@@ -182,7 +183,7 @@ async def get_timeline(
 
     query: Dict[str, Any] = {"project_key": project_key}
     if assignee:
-        query["assignee"] = {"$regex": assignee, "$options": "i"}
+        query["assignee"] = {"$regex": re.escape(assignee), "$options": "i"}
     if issue_type:
         query["issue_type"] = issue_type
     if sprint:
@@ -294,7 +295,7 @@ async def get_blockers(
         "project_key": project_key,
         "$or": [
             {"flagged": True},
-            {"linked_keys.type": {"$regex": "block", "$options": "i"}},
+            {"linked_keys.type": {"$regex": re.escape("block"), "$options": "i"}},
         ],
     }
 
@@ -336,7 +337,7 @@ def _build_issue_filter(
     if issue_type:
         query["issue_type"] = issue_type
     if assignee:
-        query["assignee"] = {"$regex": assignee, "$options": "i"}
+        query["assignee"] = {"$regex": re.escape(assignee), "$options": "i"}
     if flagged is not None:
         query["flagged"] = flagged
     if sprint:

@@ -1,4 +1,5 @@
 """Tests for src/routes/dashboard.py — Dashboard API endpoints."""
+import re
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -54,6 +55,14 @@ class TestBuildIssueFilter:
         assert result["issue_type"] == "Task"
         assert result["flagged"] is False
         assert result["sprint"] == "Sprint 1"
+
+    def test_build_issue_filter_escapes_regex_chars(self):
+        """Regex special characters in assignee are escaped to prevent ReDoS."""
+        result = _build_issue_filter("PROJ", None, None, "user.*+?()", None, None)
+        regex_val = result["assignee"]["$regex"]
+        # Should be escaped — no raw regex operators
+        assert ".*" not in regex_val
+        assert re.escape("user.*+?()") == regex_val
 
 
 class TestBuildCanvasGraph:
