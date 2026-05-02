@@ -127,6 +127,31 @@ async def list_capabilities(
             rollups=_rollup_from_doc(rollup_doc),
         ))
 
+    # Add mention counts per capability
+    issues_coll = db[COLL_JIRA_ISSUES]
+    for cap_summary in data:
+        # Get epics under this capability
+        epic_keys = [e["key"] for e in await issues_coll.find(
+            {"parent_key": cap_summary.key, "issue_type": "Epic"},
+            {"key": 1, "_id": 0}
+        ).to_list(length=1000)]
+
+        # Count issues in this capability's subtree that mention the current user
+        if epic_keys:
+            mention_filter = {
+                "comment_mentions": user.user_id,
+                "$or": [
+                    {"parent_key": cap_summary.key},
+                    {"epic_link_key": {"$in": epic_keys}},
+                ],
+            }
+            cap_summary.mention_count = await issues_coll.count_documents(mention_filter)
+        else:
+            # Only direct children
+            cap_summary.mention_count = await issues_coll.count_documents(
+                {"comment_mentions": user.user_id, "parent_key": cap_summary.key}
+            )
+
     return PortfolioListResponse(
         data=data,
         total=total,

@@ -291,6 +291,7 @@ class CapabilitySummary(BaseModel):
     tshirt_size: Optional[str] = None
     project_key: str = ""
     rollups: RollupValues = Field(default_factory=RollupValues)
+    mention_count: int = 0
 
 
 class CapabilityTree(CapabilitySummary):
