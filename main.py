@@ -25,11 +25,15 @@ from src.db import close_db, connect_db
 from src.routes.dashboard import router as dashboard_router
 from src.routes.issues import init_issue_routes
 from src.routes.issues import router as issues_router
+from src.routes.portfolio import init_portfolio_routes
+from src.routes.portfolio import router as portfolio_router
 from src.routes.sync import init_sync_routes
 from src.routes.sync import router as sync_router
 from src.services.gcs import GCSClient
 from src.services.jira_client import JiraClient
 from src.services.jira_sync import JiraSyncService
+from src.services.rollup_engine import RollupEngine
+from src.services.snapshot_service import SnapshotService
 
 logging.basicConfig(
     level=logging.INFO,
@@ -59,6 +63,7 @@ async def lifespan(app: FastAPI):
 
     init_sync_routes(sync_service)
     init_issue_routes(jira_client, config)
+    init_portfolio_routes(RollupEngine(config), SnapshotService(), config)
 
     # Log Jira config status (don't validate connectivity — it blocks the event loop)
     jira_base = config.get("jira.base_url", "")
@@ -109,6 +114,7 @@ app.add_middleware(
 app.include_router(dashboard_router, prefix=API_PREFIX)
 app.include_router(sync_router, prefix=API_PREFIX)
 app.include_router(issues_router, prefix=API_PREFIX)
+app.include_router(portfolio_router, prefix=API_PREFIX)
 
 
 @app.get(f"{_root}/health/live", tags=["health"])
