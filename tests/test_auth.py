@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from src.auth import (
     ADMIN_ROLES,
     CurrentUser,
+    _get_jwt_settings,
     decode_token,
     get_current_user,
     init_auth,
@@ -198,3 +199,45 @@ class TestRequireAdmin:
         with pytest.raises(HTTPException) as exc_info:
             await require_admin(user)
         assert exc_info.value.status_code == 403
+
+
+class TestJwtSecretValidation:
+    """Tests for JWT secret validation on startup."""
+
+    def test_rejects_default_insecure_secret(self, test_config_data):
+        """_get_jwt_settings raises ValueError when secret is the insecure default."""
+        import json, os, tempfile
+        from src.config import Config
+
+        test_config_data["jwt"]["secret_key"] = "change-me-in-production"
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(test_config_data, f)
+            f.flush()
+            config = Config(f.name)
+        os.unlink(f.name)
+
+        init_auth(config)
+        with pytest.raises(ValueError, match="SECURITY"):
+            _get_jwt_settings()
+
+    def test_rejects_empty_secret(self, test_config_data):
+        """_get_jwt_settings raises ValueError when secret is empty."""
+        import json, os, tempfile
+        from src.config import Config
+
+        test_config_data["jwt"]["secret_key"] = ""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(test_config_data, f)
+            f.flush()
+            config = Config(f.name)
+        os.unlink(f.name)
+
+        init_auth(config)
+        with pytest.raises(ValueError, match="SECURITY"):
+            _get_jwt_settings()
+
+    def test_accepts_valid_secret(self, test_config):
+        """_get_jwt_settings works with a proper secret."""
+        init_auth(test_config)
+        settings = _get_jwt_settings()
+        assert settings["secret_key"] == TEST_JWT_SECRET

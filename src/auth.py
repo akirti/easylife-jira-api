@@ -39,8 +39,14 @@ def _get_jwt_settings() -> Dict[str, str]:
     """Return JWT settings from config."""
     if _config is None:
         raise RuntimeError(ERR_AUTH_NOT_INITIALIZED)
+    secret_key = _config.get("jwt.secret_key", "")
+    if not secret_key or secret_key == "change-me-in-production":
+        raise ValueError(
+            "SECURITY: jwt.secret_key must be configured securely. "
+            "Set JIRA_API_JWT__SECRET_KEY environment variable."
+        )
     return {
-        "secret_key": _config.get("jwt.secret_key", "change-me-in-production"),
+        "secret_key": secret_key,
         "algorithm": _config.get("jwt.algorithm", "HS256"),
         "issuer": _config.get("jwt.issuer", "easylife-auth"),
         "audience": _config.get("jwt.audience", "easylife-api"),
