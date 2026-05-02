@@ -11,6 +11,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+try:
+    from slowapi import Limiter, _rate_limit_exceeded_handler
+    from slowapi.errors import RateLimitExceeded
+    from slowapi.util import get_remote_address
+    _has_slowapi = True
+except ImportError:
+    _has_slowapi = False
+
 from src.auth import init_auth
 from src.config import Config
 from src.db import close_db, connect_db
@@ -78,6 +86,15 @@ app = FastAPI(
     root_path="",  # prefix is applied directly to route paths via _root
     lifespan=lifespan,
 )
+
+# Rate limiting
+if _has_slowapi:
+    limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    logger.info("Rate limiting enabled: 60 requests/minute per IP")
+else:
+    logger.warning("slowapi not installed — rate limiting disabled")
 
 # CORS
 cors_origins = config.get("server.cors_origins", ["http://localhost:3000", "http://localhost:5173"])
