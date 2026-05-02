@@ -4,12 +4,27 @@ Uses Motor async driver. Creates indexes on startup.
 """
 import logging
 from typing import Optional
+from urllib.parse import urlparse
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from src.config import Config
 
 logger = logging.getLogger(__name__)
+
+
+def _mask_uri(uri: str) -> str:
+    """Mask credentials in MongoDB URI for safe logging."""
+    try:
+        parsed = urlparse(uri)
+        if parsed.username:
+            host = parsed.hostname or "localhost"
+            port = parsed.port or 27017
+            return f"{parsed.scheme}://*****@{host}:{port}"
+        return uri
+    except Exception:
+        return "***masked***"
+
 
 _client: Optional[AsyncIOMotorClient] = None
 _db: Optional[AsyncIOMotorDatabase] = None
@@ -34,7 +49,7 @@ async def connect_db(config: Config) -> AsyncIOMotorDatabase:
     mongo_uri = config.get("database.uri", "mongodb://localhost:27017")
     db_name = config.get("database.name", "easylife_jira")
 
-    logger.info("Connecting to MongoDB at %s, database=%s", mongo_uri, db_name)
+    logger.info("Connecting to MongoDB at %s, database=%s", _mask_uri(mongo_uri), db_name)
     _client = AsyncIOMotorClient(
         mongo_uri,
         maxPoolSize=200,
@@ -65,6 +80,12 @@ async def _create_indexes(db: AsyncIOMotorDatabase) -> None:
         await issues.create_index("parent_key")
         await issues.create_index("synced_at")
         await issues.create_index("comment_mentions")
+
+        # Compound indexes for dashboard query performance
+        await issues.create_index([("project_key", 1), ("status", 1)])
+        await issues.create_index([("project_key", 1), ("assignee_email", 1)])
+        await issues.create_index([("project_key", 1), ("updated", -1)])
+        await issues.create_index([("project_key", 1), ("issue_type", 1)])
 
         sync_cfg = db[COLL_SYNC_CONFIG]
         await sync_cfg.create_index("project_key", unique=True)
