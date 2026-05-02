@@ -33,9 +33,32 @@
     "archive_prefix": "jira_archives"
   },
   "attribute_map": {
+    "customfield_10014": "epic_link_key",
     "customfield_10015": "start_date",
     "customfield_10016": "story_points",
     "customfield_10024": "sprint",
-    "customfield_10028": "team"
+    "customfield_10028": "team",
+    "customfield_10029": "tshirt_size"
+  },
+  "portfolio": {
+    "capability_issue_type": "Capability",
+    "remaining_statuses": [
+      "Backlog", "In Requirements Analysis", "Reviewing",
+      "Data Design/Analysis", "Entry Amigo", "On Deck",
+      "In Progress", "Ready for Test", "Test in Dev", "Exit Amigo"
+    ],
+    "tshirt_fallback_statuses": [
+      "Backlog", "Discovery", "UX & Tech Design", "Entry Amigos"
+    ],
+    "tshirt_size_map": {
+      "XS": 2, "S": 5, "M": 13, "L": 21, "XL": 34, "XXL": 55
+    },
+    "done_statuses": ["Done", "Closed", "Released"],
+    "cycle_time_buckets": {
+      "dev": ["In Progress", "Test in Dev"],
+      "qa": ["Ready for Test", "In QA"],
+      "stage": ["In Stage"],
+      "prod": ["Released", "In Production"]
+    }
   }
 }

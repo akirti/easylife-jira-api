@@ -35,6 +35,13 @@ COLL_SYNC_CONFIG = "jira_sync_config"
 COLL_ARCHIVES = "jira_issue_archives"
 COLL_SYNC_PROGRESS = "jira_sync_progress"
 
+# Portfolio rollup collections
+COLL_ROLLUPS_CURRENT = "rollups_current"
+COLL_ROLLUPS_SNAPSHOTS = "rollups_snapshots"
+COLL_STATUS_TRANSITIONS = "status_transitions"
+COLL_CYCLE_METRICS = "cycle_metrics"
+COLL_ISSUE_LINKS = "issue_links"
+
 
 async def connect_db(config: Config) -> AsyncIOMotorDatabase:
     """Connect to MongoDB and create indexes.
@@ -97,6 +104,39 @@ async def _create_indexes(db: AsyncIOMotorDatabase) -> None:
 
         progress = db[COLL_SYNC_PROGRESS]
         await progress.create_index("project_key", unique=True)
+
+        # Portfolio rollup indexes
+        rollups = db[COLL_ROLLUPS_CURRENT]
+        await rollups.create_index("entity_key", unique=True)
+        await rollups.create_index("entity_type")
+        await rollups.create_index("project_key")
+
+        snapshots = db[COLL_ROLLUPS_SNAPSHOTS]
+        await snapshots.create_index(
+            [("snapshot_week", 1), ("entity_key", 1)], unique=True
+        )
+        await snapshots.create_index("entity_key")
+        await snapshots.create_index("project_key")
+
+        # Status transitions + cycle metrics
+        transitions = db[COLL_STATUS_TRANSITIONS]
+        await transitions.create_index([("issue_key", 1), ("changed_at", 1)])
+        await transitions.create_index("issue_key")
+
+        metrics = db[COLL_CYCLE_METRICS]
+        await metrics.create_index("issue_key", unique=True)
+
+        # Issue links
+        links = db[COLL_ISSUE_LINKS]
+        await links.create_index(
+            [("from_key", 1), ("to_key", 1), ("link_type", 1)], unique=True
+        )
+        await links.create_index("from_key")
+        await links.create_index("to_key")
+
+        # Additional indexes on jira_issues for rollup queries
+        await issues.create_index("epic_link_key")
+        await issues.create_index([("issue_type", 1), ("status", 1)])
     except Exception as exc:
         logger.warning("Index creation failed (may require auth): %s", exc)
 

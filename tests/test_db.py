@@ -148,6 +148,22 @@ class TestCloseDB:
         assert db_module._db is None
 
 
+class TestPortfolioCollections:
+    """Tests for portfolio rollup collection constants."""
+
+    def test_portfolio_collection_constants_exist(self):
+        from src.db import (
+            COLL_ROLLUPS_CURRENT, COLL_ROLLUPS_SNAPSHOTS,
+            COLL_STATUS_TRANSITIONS, COLL_CYCLE_METRICS,
+            COLL_ISSUE_LINKS,
+        )
+        assert COLL_ROLLUPS_CURRENT == "rollups_current"
+        assert COLL_ROLLUPS_SNAPSHOTS == "rollups_snapshots"
+        assert COLL_STATUS_TRANSITIONS == "status_transitions"
+        assert COLL_CYCLE_METRICS == "cycle_metrics"
+        assert COLL_ISSUE_LINKS == "issue_links"
+
+
 class TestGetDB:
     """Tests for get_db function."""
 
