@@ -239,3 +239,27 @@ class TestRelatedItems:
         assert body["subtasks"] == []
         assert body["links"] == []
         assert body["tests"] == []
+
+
+class TestExportPortfolio:
+    @pytest.mark.asyncio
+    async def test_export_returns_docx(self, client, auth_headers, mock_db):
+        # Mock capabilities query — return empty list
+        cap_cursor = AsyncMock()
+        cap_cursor.to_list = AsyncMock(return_value=[])
+        chain = MagicMock()
+        chain.to_list = cap_cursor.to_list
+        chain.sort = MagicMock(return_value=chain)
+        mock_db._colls["jira_issues"].find = MagicMock(return_value=chain)
+
+        resp = await client.post("/api/v1/portfolio/exports/portfolio",
+                                 json={"project_key": "PROJ", "view": "progress"},
+                                 headers=auth_headers)
+        assert resp.status_code == 200
+        assert "application/vnd.openxmlformats" in resp.headers["content-type"]
+
+    @pytest.mark.asyncio
+    async def test_export_requires_auth(self, client):
+        resp = await client.post("/api/v1/portfolio/exports/portfolio",
+                                 json={"project_key": "PROJ"})
+        assert resp.status_code in (401, 403)

@@ -3,15 +3,18 @@
 Viewer endpoints require get_current_user; admin endpoints require require_admin.
 """
 import logging
+from datetime import datetime, timezone
 from typing import Annotated, Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from src.auth import CurrentUser, get_current_user, require_admin
 from src.config import Config
 import src.db as _db_mod
 from src.db import COLL_JIRA_ISSUES, COLL_ROLLUPS_CURRENT, COLL_STATUS_TRANSITIONS
+from src.services.export_service import ExportService
 from src.services.cycle_time_service import CycleTimeService
 from src.models import (
     CapabilitySummary,
@@ -346,3 +349,67 @@ async def get_related_items(
         "links": links,
         "tests": tests,
     }
+
+
+@router.post("/exports/portfolio")
+async def export_portfolio(
+    request: Request,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+) -> Response:
+    """Export portfolio data as DOCX document."""
+    body = await request.json()
+
+    project_key = body.get("project_key", "SCEN")
+    view = body.get("view", "progress")
+    filter_name = body.get("filter", "all")
+
+    db = _db_mod.get_db()
+    issues_coll = db[COLL_JIRA_ISSUES]
+    rollups_coll = db[COLL_ROLLUPS_CURRENT]
+
+    cap_type = _engine._cap_type if _engine else "Capability"
+
+    # Fetch capabilities
+    caps = await issues_coll.find(
+        {"project_key": project_key, "issue_type": cap_type},
+        {"_id": 0}
+    ).sort("key", 1).to_list(length=100)
+
+    # Attach rollups and epics
+    for cap in caps:
+        rollup = await rollups_coll.find_one(
+            {"entity_key": cap["key"]}, {"_id": 0}
+        )
+        cap["rollups"] = rollup or {}
+
+        # Fetch epics
+        epics = await issues_coll.find(
+            {"parent_key": cap["key"], "issue_type": "Epic"}, {"_id": 0}
+        ).to_list(length=200)
+
+        for epic in epics:
+            er = await rollups_coll.find_one(
+                {"entity_key": epic["key"]}, {"_id": 0}
+            )
+            epic["rollups"] = er or {}
+
+        cap["epics"] = epics
+
+    # Generate DOCX
+    service = ExportService()
+    docx_bytes = service.generate(
+        caps, view=view, filter_name=filter_name, project_key=project_key,
+    )
+
+    filename = (
+        f"portfolio-rollup-{view}-"
+        f"{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.docx"
+    )
+    return Response(
+        content=docx_bytes,
+        media_type=(
+            "application/vnd.openxmlformats-officedocument"
+            ".wordprocessingml.document"
+        ),
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
