@@ -94,10 +94,26 @@ def map_issue(raw_issue: Any, attribute_map: Dict[str, str]) -> Dict[str, Any]:
     doc["issue_links_detail"] = issue_links_detail
 
     # Custom field mapping from config
+    # Standard Jira fields (priority, status, etc.) are already extracted above.
+    # The attribute_map handles custom fields (customfield_NNNNN) and any additional
+    # fields accessible via the PropertyHolder. Skip fields already extracted to
+    # avoid overwriting standard field values with different str() representations.
+    _STANDARD_FIELDS = {
+        "priority", "status", "summary", "issuetype", "assignee", "reporter",
+        "project", "created", "updated", "duedate", "labels", "components",
+        "description", "parent", "subtasks", "fixVersions", "issuelinks",
+        "comment", "flagged", "resolution", "resolutiondate",
+    }
     for jira_field, domain_field in attribute_map.items():
-        val = getattr(fields, jira_field, None)
-        if val is not None:
-            doc[domain_field] = str(val)
+        if jira_field in _STANDARD_FIELDS:
+            continue  # Already handled above — don't re-extract
+        try:
+            val = getattr(fields, jira_field, None)
+            if val is not None:
+                doc[domain_field] = str(val)
+        except (AttributeError, TypeError):
+            # PropertyHolder may not have this field — skip silently
+            pass
 
     # Comment mentions
     doc["comment_mentions"] = extract_mentions(raw_issue)
