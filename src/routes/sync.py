@@ -4,14 +4,18 @@ All endpoints require admin role via require_admin dependency.
 """
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import Annotated, Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from src.auth import CurrentUser, require_admin
-from src.db import COLL_SYNC_CONFIG, get_db
+from src.db import COLL_SYNC_CONFIG, COLL_SYNC_PROGRESS, get_db
 from src.models import ArchiveRecord, JiraSyncConfig, SyncProgress, SyncTriggerResponse
 from src.services.jira_sync import get_sync_progress, clear_sync_progress
+
+# Sync progress older than this is considered stale (server crashed mid-sync)
+STALE_PROGRESS_MINUTES = 5
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +29,25 @@ ERR_SYNC_SERVICE_NOT_INIT = "Sync service not initialized"
 ERR_SYNC_CONFIG_NOT_FOUND = "Sync config not found for project"
 ERR_SYNC_FAILED = "Sync failed"
 ERR_ARCHIVE_FAILED = "Archive operation failed"
+
+
+async def cleanup_stale_sync_progress() -> None:
+    """Clear any sync progress stuck from a previous server crash.
+
+    Called during app startup to ensure no orphaned progress blocks new syncs.
+    """
+    try:
+        db = get_db()
+        result = await db[COLL_SYNC_PROGRESS].delete_many(
+            {"status": {"$in": ["fetching", "syncing"]}}
+        )
+        if result.deleted_count > 0:
+            logger.warning(
+                "Cleaned up %d stale sync progress records from previous server session",
+                result.deleted_count,
+            )
+    except Exception as exc:
+        logger.warning("Could not clean up stale sync progress: %s", exc)
 
 
 def init_sync_routes(sync_service: Any) -> None:
@@ -82,13 +105,31 @@ async def trigger_sync(
     # Check if sync is already running for this project
     progress = await get_sync_progress(project_key)
     if progress and progress.get("status") in ("fetching", "syncing"):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Sync already in progress for {project_key}",
-        )
+        # Check if the progress is stale (server crashed mid-sync)
+        updated_at = progress.get("updated_at")
+        is_stale = False
+        if updated_at:
+            try:
+                last_update = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+                age_minutes = (datetime.now(timezone.utc) - last_update).total_seconds() / 60
+                is_stale = age_minutes > STALE_PROGRESS_MINUTES
+            except (ValueError, TypeError):
+                is_stale = True  # Can't parse timestamp — treat as stale
 
-    # Clear any stale progress
-    await clear_sync_progress(project_key)
+        if is_stale:
+            logger.warning(
+                "Clearing stale sync progress for %s (last updated: %s)",
+                project_key, updated_at,
+            )
+            await clear_sync_progress(project_key)
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Sync already in progress for {project_key}",
+            )
+    else:
+        # Clear any completed/failed progress
+        await clear_sync_progress(project_key)
 
     # Launch sync as background task
     asyncio.create_task(_run_sync_background(project_key, days))

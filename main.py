@@ -27,7 +27,7 @@ from src.routes.issues import init_issue_routes
 from src.routes.issues import router as issues_router
 from src.routes.portfolio import init_portfolio_routes
 from src.routes.portfolio import router as portfolio_router
-from src.routes.sync import init_sync_routes
+from src.routes.sync import cleanup_stale_sync_progress, init_sync_routes
 from src.routes.sync import router as sync_router
 from src.services.gcs import GCSClient
 from src.services.jira_client import JiraClient
@@ -65,6 +65,9 @@ async def lifespan(app: FastAPI):
     init_sync_routes(sync_service)
     init_issue_routes(jira_client, config)
     init_portfolio_routes(rollup_engine, SnapshotService(), config)
+
+    # Clean up any sync progress stuck from a previous server crash
+    await cleanup_stale_sync_progress()
 
     # Log Jira config status (don't validate connectivity — it blocks the event loop)
     jira_base = config.get("jira.base_url", "")
