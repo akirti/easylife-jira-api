@@ -110,7 +110,7 @@ def map_issue(raw_issue: Any, attribute_map: Dict[str, str]) -> Dict[str, Any]:
         try:
             val = getattr(fields, jira_field, None)
             if val is not None:
-                doc[domain_field] = str(val)
+                doc[domain_field] = _extract_custom_field_value(val)
         except (AttributeError, TypeError):
             # PropertyHolder may not have this field — skip silently
             pass
@@ -119,6 +119,30 @@ def map_issue(raw_issue: Any, attribute_map: Dict[str, str]) -> Dict[str, Any]:
     doc["comment_mentions"] = extract_mentions(raw_issue)
 
     return doc
+
+
+def _extract_custom_field_value(val: Any) -> Any:
+    """Extract a usable value from a Jira custom field.
+
+    Jira custom fields can be strings, numbers, lists, or PropertyHolder
+    objects (e.g. team, sprint). This extracts a meaningful value instead
+    of returning the repr string.
+    """
+    if isinstance(val, (str, int, float, bool)):
+        return val
+    if isinstance(val, list):
+        return [_extract_custom_field_value(item) for item in val]
+    # PropertyHolder or Resource objects — try common attributes
+    for attr in ("name", "value", "displayName", "key"):
+        extracted = getattr(val, attr, None)
+        if extracted is not None:
+            return str(extracted)
+    # Fallback: if it has a meaningful str representation, use it;
+    # otherwise return None to avoid storing repr strings
+    s = str(val)
+    if s.startswith("<") and "object at 0x" in s:
+        return None
+    return s
 
 
 def _extract_status_category(fields: Any) -> str:
