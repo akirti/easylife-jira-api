@@ -136,6 +136,7 @@ async def _create_indexes(db: AsyncIOMotorDatabase) -> None:
 
         # Additional indexes on jira_issues for rollup queries
         await issues.create_index("epic_link_key")
+        await issues.create_index("parent_link_key")
         await issues.create_index([("issue_type", 1), ("status", 1)])
     except Exception as exc:
         logger.warning("Index creation failed (may require auth): %s", exc)

@@ -126,7 +126,7 @@ class RollupEngine:
         epics = await issues_coll.find(
             {"project_key": project_key, "issue_type": "Epic"},
             {"key": 1, "summary": 1, "status": 1, "tshirt_size": 1,
-             "parent_key": 1, "_id": 0},
+             "parent_key": 1, "parent_link_key": 1, "_id": 0},
         ).to_list(length=10000)
 
         stories = await issues_coll.find(
@@ -143,10 +143,11 @@ class RollupEngine:
             if ek:
                 stories_by_epic.setdefault(ek, []).append(s)
 
-        # Group epics by capability (parent_key)
+        # Group epics by capability
+        # Uses parent_link_key (custom field) with fallback to parent_key (standard)
         epics_by_cap: Dict[str, List[Dict]] = {}
         for e in epics:
-            pk = e.get("parent_key", "")
+            pk = e.get("parent_link_key") or e.get("parent_key", "")
             if pk:
                 epics_by_cap.setdefault(pk, []).append(e)
 

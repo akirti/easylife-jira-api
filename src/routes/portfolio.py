@@ -6,6 +6,15 @@ import logging
 from datetime import datetime, timezone
 from typing import Annotated, Any, Dict, List, Optional
 
+
+def _parent_filter(parent_key: str) -> Dict[str, Any]:
+    """Build a MongoDB filter matching issues whose parent is parent_key.
+
+    Checks both standard 'parent_key' (from fields.parent) and
+    'parent_link_key' (from custom field, e.g. customfield_12201).
+    """
+    return {"$or": [{"parent_key": parent_key}, {"parent_link_key": parent_key}]}
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
@@ -132,7 +141,7 @@ async def list_capabilities(
     for cap_summary in data:
         # Get epics under this capability
         epic_keys = [e["key"] for e in await issues_coll.find(
-            {"parent_key": cap_summary.key, "issue_type": "Epic"},
+            {**_parent_filter(cap_summary.key), "issue_type": "Epic"},
             {"key": 1, "_id": 0}
         ).to_list(length=1000)]
 
@@ -142,14 +151,14 @@ async def list_capabilities(
                 "comment_mentions": user.user_id,
                 "$or": [
                     {"parent_key": cap_summary.key},
+                    {"parent_link_key": cap_summary.key},
                     {"epic_link_key": {"$in": epic_keys}},
                 ],
             }
             cap_summary.mention_count = await issues_coll.count_documents(mention_filter)
         else:
-            # Only direct children
             cap_summary.mention_count = await issues_coll.count_documents(
-                {"comment_mentions": user.user_id, "parent_key": cap_summary.key}
+                {"comment_mentions": user.user_id, **_parent_filter(cap_summary.key)}
             )
 
     return PortfolioListResponse(
@@ -180,7 +189,7 @@ async def capability_tree(
 
     # Child epics
     epic_docs = await db[COLL_JIRA_ISSUES].find(
-        {"parent_key": key, "issue_type": "Epic"}, {"_id": 0}
+        {**_parent_filter(key), "issue_type": "Epic"}, {"_id": 0}
     ).to_list(length=1000)
 
     # Epic rollups in bulk
@@ -332,7 +341,7 @@ async def get_related_items(
 
     # Subtasks: issues where parent_key == this key and type is Sub-task
     subtask_cursor = issues_coll.find(
-        {"parent_key": key, "issue_type": "Sub-task"},
+        {**_parent_filter(key), "issue_type": "Sub-task"},
         {"_id": 0, "key": 1, "summary": 1, "status": 1, "status_category": 1,
          "issue_type": 1, "story_points": 1, "assignee": 1}
     )
@@ -409,7 +418,7 @@ async def export_portfolio(
 
         # Fetch epics
         epics = await issues_coll.find(
-            {"parent_key": cap["key"], "issue_type": "Epic"}, {"_id": 0}
+            {**_parent_filter(cap["key"]), "issue_type": "Epic"}, {"_id": 0}
         ).to_list(length=200)
 
         for epic in epics:
